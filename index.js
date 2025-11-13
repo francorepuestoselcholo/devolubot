@@ -742,6 +742,7 @@ Fecha factura: ${ctx.session.fechaFactura}
 
   // Fallback si no está en un flujo y Gemini no respondió o no está configurado
   await ctx.reply("No entendí eso. Por favor, usá los botones del menú principal, que están *debajo* del último mensaje que te envié, o escribí /start.", mainKeyboard.reply_markup);
+}
 });
 
 bot.action('confirm_save', async (ctx)=>{
