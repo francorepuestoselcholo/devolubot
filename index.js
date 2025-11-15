@@ -697,8 +697,7 @@ Fecha factura: ${ctx.session.fechaFactura}
         parse_mode: 'Markdown' 
       });
     }
-  }
-
+  
   // fallback: Gemini AI
   if (GEMINI_API_KEY) {
     try {
