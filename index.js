@@ -493,7 +493,13 @@ bot.action(/get_ticket_(\d+)/, async (ctx) => {
       try { await ctx.reply("⚠️ No se encontró el email del proveedor en la planilla. Podés agregarlo manualmente en la pestaña 'Proveedores' o cargarlo desde el bot."); } catch(e){}
     }
 
-
+    await ctx.reply("Ticket PDF generado y enviado.");
+  } catch (err) {
+    console.error("Error generando ticket PDF:", err.message);
+    await ctx.reply("❌ Error al generar el ticket PDF.");
+    return replyMain(ctx);
+  }
+});
 
 bot.action(/remitente_(.+)/, async (ctx)=>{
   try{ await ctx.answerCbQuery(); } catch(e){} 
@@ -704,9 +710,8 @@ Fecha factura: ${ctx.session.fechaFactura}
 }   // <-- cierre del bloque "if (s.step === 'fechaFactura')"
 }   // <-- cierre del bloque "if (s.step)"
 
-// fallback: Gemini AI
-
-if (GEMINI_API_KEY) {
+  // fallback: Gemini AI
+  if (GEMINI_API_KEY) {
   try {
     const payload = {
       contents: [{ parts: [{ text: text }] }],
@@ -750,12 +755,14 @@ if (GEMINI_API_KEY) {
 // Fallback si no está en un flujo ni con Gemini
 await ctx.reply(
   "No entendí eso. Por favor, usá los botones del menú principal, que están *debajo* del último mensaje que te envié, o escribí /start.",
-  mainKeyboard.reply_markup
+  { parse_mode: 'Markdown', reply_markup: mainKeyboard.reply_markup }
 );
 
+// Cerramos el handler para que no siga ejecutándose y evitar falta de cierre
+return;
+});
+
 bot.action('confirm_save', async (ctx)=>{
-  try { await ctx.answerCbQuery(); } catch(e) { console.warn("Callback query timed out (confirm_save).", e.message); }
-  
   const s = ctx.session;
   if (!s || !s.remitente) return ctx.reply("No hay datos para guardar. Volvé al menú.", mainKeyboard.reply_markup);
   
