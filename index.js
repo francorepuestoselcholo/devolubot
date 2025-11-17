@@ -5,6 +5,10 @@ import LocalSession from 'telegraf-session-local';
 import PDFDocument from "pdfkit";
 import { google } from "googleapis";
 import axios from "axios";
+import { sendMailToProvider } from "./mailer.js";
+import { saveTicketByRemitente } from "./storage.js";
+import { createAuthMiddleware } from "./auth.js";
+
 
 // --- CONFIG/ENV ---
 // ID de la hoja de cálculo
@@ -51,6 +55,14 @@ app.listen(PORT, () => console.log(`Express escuchando en ${PORT}`));
 
 // --- Bot ---
 const bot = new Telegraf(BOT_TOKEN);
+
+// Lista de IDs permitidos (STRING o NUMBER), los que me diste:
+const ALLOWED_USER_IDS = [
+  "8581935271","6085589564","8540609629","8591609267","8400343049","7540875989"
+];
+
+// añadir este middleware ANTES del resto (ver orden abajo)
+bot.use( createAuthMiddleware(ALLOWED_USER_IDS) );
 
 // Middleware de sesión con persistencia
 bot.use(
@@ -211,15 +223,23 @@ async function readProviders() {
   return vals.map(v=>v[0]).filter(Boolean);
 }
 
-async function addProvider(name) {
-  if (!sheetsInitialized) throw new Error("Sheets no inicializado o deshabilitado.");
-  await sheetsClient.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID,
-    range: `Proveedores!A:A`,
-    valueInputOption: "RAW",
-    requestBody: { values: [[name]] }
-  });
+async function addProvider(nombre, email) {
+  try {
+    const range = "Proveedores!A2:B";
+    await sheetsClient.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[nombre, email || ""]],
+      },
+    });
+  } catch (error) {
+    console.error("Error al agregar proveedor:", error);
+    throw error;
+  }
 }
+
 
 // --- Helpers ---
 async function appendLog(message) {
@@ -407,22 +427,80 @@ bot.action(/get_ticket_(\d+)/, async (ctx) => {
     try {
         const pdfBuf = await generateTicketPDF(ticketData);
 
-        // Envío del ticket PDF al usuario
-        await ctx.replyWithDocument({ 
-            source: pdfBuf, 
-            filename: `ticket_devolucion_${remitente}_${ticketData.codigo}_${Date.now()}.pdf` 
-        }, { caption: "Aquí tenés el ticket PDF solicitado." });
-
-    } catch (e) {
-        console.error("Error generando/enviando PDF al usuario:", e.message);
-        await ctx.reply("❌ Ocurrió un error al generar el ticket PDF. Avisá al administrador.");
+            // --- después de: const pdfBuf = await generateTicketPDF(ticketData);
+    // 1) Guardar en disco por remitente
+    try {
+      const baseDir = process.env.TICKETS_DIR || "./tickets"; // usa variable de entorno si querés cambiar la ruta
+      const safeFilename = `ticket_${ticketData.remitente}_${ticketData.codigo || "nocodigo"}_${Date.now()}.pdf`;
+      const savedPath = await saveTicketByRemitente(baseDir, ticketData.remitente, safeFilename, pdfBuf);
+      await appendLog(`Ticket guardado en disco: ${savedPath}`);
+    } catch (err) {
+      console.error("Error guardando ticket en disco:", err.message);
     }
 
-    // Limpiar sesión y volver al menú
-    ctx.session = {};
-    return replyMain(ctx);
-});
+    // 2) Enviar mail AL PROVEEDOR si tiene mail en la planilla (intento de lectura)
+    // intentamos leer email desde la planilla "Proveedores" (columna B) buscando coincidencia por nombre
+    let providerEmail = null;
+    try {
+      if (sheetsInitialized) {
+        const resp = await sheetsClient.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `Proveedores!A2:B` }).catch(()=>({ data: { values: [] }}));
+        const rows = resp.data.values || [];
+        for (const r of rows) {
+          const name = (r[0] || "").trim();
+          const mail = (r[1] || "").trim();
+          if (name && ticketData.proveedor && name.toLowerCase() === ticketData.proveedor.toLowerCase()) {
+            providerEmail = mail || null;
+            break;
+          }
+        }
+      }
+    } catch(e){ console.warn("No se pudo leer email del proveedor:", e.message); }
 
+    if (providerEmail) {
+      try {
+        const subject = `Devolución registrada - ${ticketData.remitente} - ${ticketData.codigo || ''}`;
+        const html = `<p>Hola,</p>
+          <p>Se registró una devolución desde <b>${ticketData.remitente}</b>:</p>
+          <ul>
+            <li><b>Proveedor:</b> ${ticketData.proveedor}</li>
+            <li><b>Código:</b> ${ticketData.codigo}</li>
+            <li><b>Descripción:</b> ${ticketData.descripcion}</li>
+            <li><b>Cantidad:</b> ${ticketData.cantidad}</li>
+            <li><b>Motivo:</b> ${ticketData.motivo}</li>
+            <li><b>N° Remito/Factura:</b> ${ticketData.remito}</li>
+            <li><b>Fecha factura:</b> ${ticketData.fechaFactura}</li>
+          </ul>
+          <p>Adjuntamos el ticket PDF para gestionar la devolución.</p>
+          <p>Saludos,<br/>Repuestos El Cholo</p>`;
+        
+          console.log("DEBUG: llamando a sendMail...");
+        await sendMailToProvider({
+          to: providerEmail,
+          cc: "info@repuestoselcholo.com.ar",
+          subject,
+          html,
+          attachmentBuf: pdfBuf,
+          attachmentName: `ticket_${ticketData.remitente}_${ticketData.codigo || ''}.pdf`
+        });
+
+        await appendLog(`Email enviado a proveedor ${providerEmail} para devolución ${ticketData.codigo || ''}`);
+      } catch (e) {
+        console.error("Error enviando mail al proveedor:", e.message);
+        // No abortamos el flujo: solo notificamos al usuario
+        try { await ctx.reply("⚠️ No se pudo enviar el correo al proveedor (revise la configuración)."); } catch(e) {}
+      }
+    } else {
+      // Si no existe email en la planilla, avisamos y no intentamos enviar
+      try { await ctx.reply("⚠️ No se encontró el email del proveedor en la planilla. Podés agregarlo manualmente en la pestaña 'Proveedores' o cargarlo desde el bot."); } catch(e){}
+    }
+
+    await ctx.reply("Ticket PDF generado y enviado.");
+  } catch (err) {
+    console.error("Error generando ticket PDF:", err.message);
+    await ctx.reply("❌ Error al generar el ticket PDF.");
+    return replyMain(ctx);
+  }
+});
 
 bot.action(/remitente_(.+)/, async (ctx)=>{
   try{ await ctx.answerCbQuery(); } catch(e){} 
@@ -469,15 +547,48 @@ bot.action('prov_other', async (ctx)=>{
   await ctx.editMessageText("Escribí el nombre del proveedor (texto)."); 
 });
 
-bot.action('agregar_proveedor', async (ctx)=>{ 
-  try{ await ctx.answerCbQuery(); } catch(e){} 
-  if (!sheetsInitialized) {
-    return ctx.reply("❌ Función no disponible. La integración con Google Sheets está deshabilitada.", mainKeyboard.reply_markup);
-  }
-  ctx.session.flow='agregar_proveedor'; 
-  ctx.session.step='nuevo_proveedor'; 
-  await ctx.editMessageText("Escribí el *nombre del proveedor* que querés agregar:", { parse_mode: 'Markdown' }); 
+// --- agregar proveedor (ahora pide también el email)
+bot.command("agregar_proveedor", async (ctx) => {
+  ctx.session.state = "esperando_nombre_proveedor";
+  ctx.reply("🧾 Ingresá el nombre del proveedor:");
 });
+
+bot.on("text", async (ctx, next) => {
+  const state = ctx.session?.state;
+  const text = ctx.message.text.trim();
+
+  if (state === "esperando_nombre_proveedor") {
+    ctx.session.nuevoProveedor = { nombre: text };
+    ctx.session.state = "esperando_email_proveedor";
+    return ctx.reply("📧 Ingresá el correo electrónico del proveedor:");
+  }
+
+  if (state === "esperando_email_proveedor") {
+    const { nombre } = ctx.session.nuevoProveedor;
+    const email = text;
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return ctx.reply("❌ Ese no parece un correo válido. Intentá nuevamente:");
+    }
+
+    try {
+      await addProvider(nombre, email);
+      ctx.reply(`✅ Proveedor agregado: ${nombre} (${email})`);
+      await appendLog(`Proveedor agregado: ${nombre} (${email})`);
+    } catch (err) {
+      console.error("Error agregando proveedor:", err.message);
+      ctx.reply("⚠️ No se pudo agregar el proveedor.");
+    }
+
+    ctx.session.state = null;
+    ctx.session.nuevoProveedor = null;
+    return;
+  }
+
+  // si no estamos en un flujo de proveedor, seguir con el bot normalmente
+  return next();
+});
+
 
 bot.action('consultar', async (ctx)=>{
   try { await ctx.answerCbQuery(); } catch(e) { console.warn("Callback query timed out (consultar).", e.message); }
@@ -561,15 +672,20 @@ bot.on('text', async (ctx)=>{
       return ctx.reply("Fecha de factura (DD/MM/AAAA):"); 
     }
     
-    if (s.step === 'fechaFactura') {
-      const fechaFactura = text;
-      // Validación de formato DD/MM/AAAA (básico)
-      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(fechaFactura)) {
-        return ctx.reply("⚠️ Formato de fecha incorrecto. Por favor, usá el formato *DD/MM/AAAA* (ej: 01/10/2023):", { parse_mode: 'Markdown' });
-      }
+if (s.step === 'fechaFactura') {
+  const fechaFactura = text;
 
-      ctx.session.fechaFactura = fechaFactura;
-      const summary = `*Resumen de la devolución:*
+  // Validación de formato DD/MM/AAAA (básico)
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(fechaFactura)) {
+    return ctx.reply(
+      "⚠️ Formato de fecha incorrecto. Por favor, usá el formato *DD/MM/AAAA* (ej: 01/10/2023):",
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  ctx.session.fechaFactura = fechaFactura;
+
+  const summary = `*Resumen de la devolución:*
 
 Remitente: *${ctx.session.remitente}*
 Proveedor: *${ctx.session.proveedor}*
@@ -579,70 +695,76 @@ Cantidad: ${ctx.session.cantidad}
 Motivo: ${ctx.session.motivo}
 N° Remito/Factura: ${ctx.session.remito}
 Fecha factura: ${ctx.session.fechaFactura}
-      `;
-      ctx.session.step = 'confirm';
-      
-      // Teclado de confirmación
-      const confirmationKeyboard = Markup.inlineKeyboard([ 
-          Markup.button.callback('✅ Confirmar y guardar','confirm_save'), 
-          Markup.button.callback('✏️ Cancelar','main') 
-      ]).reply_markup;
+  `;
 
-      return ctx.reply(summary, { 
-        reply_markup: confirmationKeyboard, 
-        parse_mode: 'Markdown' 
-      });
-    }
-  }
+  ctx.session.step = 'confirm';
+
+  const confirmationKeyboard = Markup.inlineKeyboard([
+    Markup.button.callback('✅ Confirmar y guardar', 'confirm_save'),
+    Markup.button.callback('✏️ Cancelar', 'main')
+  ]).reply_markup;
+
+
+  return ctx.reply(summary, {
+    reply_markup: confirmationKeyboard,
+    parse_mode: 'Markdown'
+  });
+}   // <-- cierre del bloque "if (s.step === 'fechaFactura')"
+}   // <-- cierre del bloque "if (s.step)"
 
   // fallback: Gemini AI
   if (GEMINI_API_KEY) {
-    try {
-      const payload = {
-          contents: [{ parts: [{ text: text }] }],
-          systemInstruction: {
-              parts: [{ text: "Eres un asistente amigable y formal que responde preguntas generales, pero siempre sugiere usar el menú principal para las funciones del bot de devoluciones de Repuestos El Cholo." }]
-          },
-          generationConfig: {
-            maxOutputTokens: 256
-          }
-      };
+  try {
+    const payload = {
+      contents: [{ parts: [{ text: text }] }],
+      systemInstruction: {
+        parts: [{
+          text: "Eres un asistente amigable y formal que responde preguntas generales, pero siempre sugiere usar el menú principal para las funciones del bot de devoluciones de Repuestos El Cholo."
+        }]
+      },
+      generationConfig: { maxOutputTokens: 256 }
+    };
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+    const apiUrl =
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
 
-      const aiResp = await axios.post(apiUrl, payload);
+    const aiResp = await axios.post(apiUrl, payload);
 
-      const reply = aiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Perdón, no entendí. Podés usar el menú.";
-      
-      await ctx.reply(reply, mainKeyboard.reply_markup); 
-      
-      return;
-    } catch (e) {
-      console.error("--- Error en la llamada a Gemini ---");
-      if (e.response) {
-        // El servidor respondió con un código de estado fuera de 2xx
-        console.error(`Error Gemini: Status ${e.response.status}. Data:`, e.response.data);
-        await ctx.reply(`⚠️ Error de API: No pude procesar tu solicitud con el asistente (código ${e.response.status}). Por favor, revisá la consola para el detalle del error.`, mainKeyboard.reply_markup);
-      } else if (e.request) {
-        // La solicitud fue hecha pero no hubo respuesta
-        console.error("Error Gemini: No se recibió respuesta del servidor.", e.message);
-        await ctx.reply("⚠️ Error de red: No pude contactar al asistente. Revisa la conexión.", mainKeyboard.reply_markup);
-      } else {
-        // Otros errores (ej. configuración de Axios)
-        console.error("Error Gemini:", e.message);
-        await ctx.reply("⚠️ Error interno del asistente. Revisa la consola.", mainKeyboard.reply_markup);
-      }
-      return;
+    const reply = aiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text
+      || "Perdón, no entendí. Podés usar el menú.";
+
+    await ctx.reply(reply, mainKeyboard.reply_markup);
+    return;
+
+  } catch (e) {
+    console.error("--- Error en la llamada a Gemini ---");
+
+    if (e.response) {
+      console.error(`Error Gemini: Status ${e.response.status}. Data:`, e.response.data);
+      await ctx.reply(`⚠️ Error de API: No pude procesar tu solicitud con el asistente (código ${e.response.status}). Por favor, revisá la consola para el detalle del error.`, mainKeyboard.reply_markup);
+    } else if (e.request) {
+      console.error("Error Gemini: No se recibió respuesta del servidor.", e.message);
+      await ctx.reply("⚠️ Error de red: No pude contactar al asistente. Revisa la conexión.", mainKeyboard.reply_markup);
+    } else {
+      console.error("Error Gemini:", e.message);
+      await ctx.reply("⚠️ Error interno del asistente. Revisa la consola.", mainKeyboard.reply_markup);
     }
-  }
 
-  // Fallback si no está en un flujo y Gemini no respondió o no está configurado
-  await ctx.reply("No entendí eso. Por favor, usá los botones del menú principal, que están *debajo* del último mensaje que te envié, o escribí /start.", mainKeyboard.reply_markup);
+    return;
+  }
+}
+
+// Fallback si no está en un flujo ni con Gemini
+await ctx.reply(
+  "No entendí eso. Por favor, usá los botones del menú principal, que están *debajo* del último mensaje que te envié, o escribí /start.",
+  { parse_mode: 'Markdown', reply_markup: mainKeyboard.reply_markup }
+);
+
+// Cerramos el handler para que no siga ejecutándose y evitar falta de cierre
+return;
 });
 
 bot.action('confirm_save', async (ctx)=>{
-  try { await ctx.answerCbQuery(); } catch(e) { console.warn("Callback query timed out (confirm_save).", e.message); }
-  
   const s = ctx.session;
   if (!s || !s.remitente) return ctx.reply("No hay datos para guardar. Volvé al menú.", mainKeyboard.reply_markup);
   

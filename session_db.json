@@ -11,6 +11,70 @@
       "data": {
         "step": "main_menu"
       }
+    },
+    {
+      "id": "8581935271:8581935271",
+      "data": {
+        "step": "main_menu",
+        "lastDevolutions": [
+          {
+            "fecha": "17/11/2025, 02:45:57",
+            "proveedor": "Américo grieco (DAR)",
+            "codigo": "NJ 309",
+            "descripcion": "Rodamiento con ranura sin seguro",
+            "cantidad": "2",
+            "motivo": "Mal enviado",
+            "remito": "0004-00029414",
+            "fechaFactura": "07/11/2025",
+            "usuarioId": "8581935271"
+          },
+          {
+            "fecha": "11/7/2025, 2:55:04 PM",
+            "proveedor": "Diesel frenos",
+            "codigo": "W9700511280",
+            "descripcion": "Servo embrague 1633",
+            "cantidad": "2",
+            "motivo": "Mal enviado",
+            "remito": "00013-00010189",
+            "fechaFactura": "06/11/2025",
+            "usuarioId": "8581935271"
+          },
+          {
+            "fecha": "",
+            "proveedor": "ARCORE",
+            "codigo": "45155",
+            "descripcion": "AMORTIGUADOR DELANTERO SCANIA",
+            "cantidad": "1",
+            "motivo": "SE REVENTO",
+            "remito": "701491",
+            "fechaFactura": "11/12/2024",
+            "usuarioId": ""
+          },
+          {
+            "fecha": "",
+            "proveedor": "SCANMAR",
+            "codigo": "2160199-I",
+            "descripcion": "DEPÓSITO LIQUIDO DIRECCION HIDRAULICO",
+            "cantidad": "1",
+            "motivo": "LA CANILLA NO ABRE",
+            "remito": "4255",
+            "fechaFactura": "07/11/2024",
+            "usuarioId": ""
+          },
+          {
+            "fecha": "",
+            "proveedor": "SCANMAR",
+            "codigo": "339130-I",
+            "descripcion": "RODILLO HORQUILLA EMBRAGUE",
+            "cantidad": "4",
+            "motivo": "NO ME SIRVE QUE SEA ABIERTO",
+            "remito": "4692",
+            "fechaFactura": "12/12/2024",
+            "usuarioId": ""
+          }
+        ],
+        "ticketRemitente": "Ramirez"
+      }
     }
   ]
 }
