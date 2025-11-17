@@ -703,6 +703,7 @@ Fecha factura: ${ctx.session.fechaFactura}
     Markup.button.callback('✏️ Cancelar', 'main')
   ]).reply_markup;
 
+
   return ctx.reply(summary, {
     reply_markup: confirmationKeyboard,
     parse_mode: 'Markdown'
