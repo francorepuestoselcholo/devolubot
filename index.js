@@ -703,7 +703,6 @@ Fecha factura: ${ctx.session.fechaFactura}
   });
 }   // <-- cierre del bloque "if (s.step === 'fechaFactura')"
 }   // <-- cierre del bloque "if (s.step)"
-}   // <-- cierre del handler "bot.on('text', ... )"
 
 // fallback: Gemini AI
 
