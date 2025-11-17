@@ -1,38 +1,9 @@
-// mailer.js
-import nodemailer from "nodemailer";
-
-/**
- * Configuración del transporter usando Gmail + app password
- * Requiere:
- *   process.env.MAIL_USER   -> 'francorepuestoselcholo@gmail.com'
- *   process.env.MAIL_PASS   -> password / app password
- */
-const MAIL_USER = process.env.MAIL_USER || 'francorepuestoselcholo@gmail.com';
-const MAIL_PASS = process.env.MAIL_PASS || process.env.mail_pass || null; // soporte ambas formas
-
-if (!MAIL_PASS) {
-  console.warn("mailer.js: MAIL_PASS no definido en variables de entorno. El envío de mails fallará si se intenta.");
-}
-
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: MAIL_USER,
-    pass: MAIL_PASS
-  }
-});
-
-/**
- * sendMailToProvider
- * @param {string} to - email del proveedor
- * @param {string} cc - email en copia (info@repuestoselcholo.com.ar)
- * @param {string} subject
- * @param {string} html - cuerpo en HTML
- * @param {Buffer} attachmentBuf - buffer del PDF
- * @param {string} attachmentName - nombre del archivo adjunto
- */
 export async function sendMailToProvider({ to, cc = "info@repuestoselcholo.com.ar", subject, html, attachmentBuf, attachmentName }) {
+  console.log("DEBUG: sendMailToProvider() fue llamada");
+  console.log("DEBUG: Parámetros recibidos:", { to, cc, subject, attachmentName });
+
   if (!to) {
+    console.error("ERROR: No se proporcionó el mail del proveedor (to).");
     throw new Error("No se proporcionó 'to' (email del proveedor).");
   }
 
@@ -52,6 +23,17 @@ export async function sendMailToProvider({ to, cc = "info@repuestoselcholo.com.a
     });
   }
 
-  // Enviar
-  return transporter.sendMail(mailOptions);
+  console.log("DEBUG: Intentando enviar mail...");
+  console.log("DEBUG: MAIL_USER:", MAIL_USER);
+  console.log("DEBUG: MAIL_PASS existe?", MAIL_PASS ? "SI" : "NO");
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("DEBUG: Mail enviado con éxito!", info);
+    return info;
+  } catch (error) {
+    console.error("❌ ERROR REAL AL ENVIAR EL MAIL:");
+    console.error(error);
+    throw error;
+  }
 }

@@ -472,7 +472,8 @@ bot.action(/get_ticket_(\d+)/, async (ctx) => {
           </ul>
           <p>Adjuntamos el ticket PDF para gestionar la devolución.</p>
           <p>Saludos,<br/>Repuestos El Cholo</p>`;
-
+        
+          console.log("DEBUG: llamando a sendMail...");
         await sendMailToProvider({
           to: providerEmail,
           cc: "info@repuestoselcholo.com.ar",
