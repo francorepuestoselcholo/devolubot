@@ -665,15 +665,20 @@ bot.on('text', async (ctx)=>{
       return ctx.reply("Fecha de factura (DD/MM/AAAA):"); 
     }
     
-    if (s.step === 'fechaFactura') {
-      const fechaFactura = text;
-      // Validación de formato DD/MM/AAAA (básico)
-      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(fechaFactura)) {
-        return ctx.reply("⚠️ Formato de fecha incorrecto. Por favor, usá el formato *DD/MM/AAAA* (ej: 01/10/2023):", { parse_mode: 'Markdown' });
-      }
+if (s.step === 'fechaFactura') {
+  const fechaFactura = text;
 
-      ctx.session.fechaFactura = fechaFactura;
-      const summary = `*Resumen de la devolución:*
+  // Validación de formato DD/MM/AAAA (básico)
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(fechaFactura)) {
+    return ctx.reply(
+      "⚠️ Formato de fecha incorrecto. Por favor, usá el formato *DD/MM/AAAA* (ej: 01/10/2023):",
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  ctx.session.fechaFactura = fechaFactura;
+
+  const summary = `*Resumen de la devolución:*
 
 Remitente: *${ctx.session.remitente}*
 Proveedor: *${ctx.session.proveedor}*
@@ -683,66 +688,71 @@ Cantidad: ${ctx.session.cantidad}
 Motivo: ${ctx.session.motivo}
 N° Remito/Factura: ${ctx.session.remito}
 Fecha factura: ${ctx.session.fechaFactura}
-      `;
-      ctx.session.step = 'confirm';
-      
-      // Teclado de confirmación
-      const confirmationKeyboard = Markup.inlineKeyboard([ 
-          Markup.button.callback('✅ Confirmar y guardar','confirm_save'), 
-          Markup.button.callback('✏️ Cancelar','main') 
-      ]).reply_markup;
+  `;
 
-      return ctx.reply(summary, { 
-        reply_markup: confirmationKeyboard, 
-        parse_mode: 'Markdown' 
-      });
+  ctx.session.step = 'confirm';
+
+  const confirmationKeyboard = Markup.inlineKeyboard([
+    Markup.button.callback('✅ Confirmar y guardar', 'confirm_save'),
+    Markup.button.callback('✏️ Cancelar', 'main')
+  ]).reply_markup;
+
+  return ctx.reply(summary, {
+    reply_markup: confirmationKeyboard,
+    parse_mode: 'Markdown'
+  });
+}   // <-- cierre del bloque "if (s.step === 'fechaFactura')"
+}   // <-- cierre del bloque "if (s.step)"
+}   // <-- cierre del handler "bot.on('text', ... )"
+
+// fallback: Gemini AI
+
+if (GEMINI_API_KEY) {
+  try {
+    const payload = {
+      contents: [{ parts: [{ text: text }] }],
+      systemInstruction: {
+        parts: [{
+          text: "Eres un asistente amigable y formal que responde preguntas generales, pero siempre sugiere usar el menú principal para las funciones del bot de devoluciones de Repuestos El Cholo."
+        }]
+      },
+      generationConfig: { maxOutputTokens: 256 }
+    };
+
+    const apiUrl =
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
+
+    const aiResp = await axios.post(apiUrl, payload);
+
+    const reply = aiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text
+      || "Perdón, no entendí. Podés usar el menú.";
+
+    await ctx.reply(reply, mainKeyboard.reply_markup);
+    return;
+
+  } catch (e) {
+    console.error("--- Error en la llamada a Gemini ---");
+
+    if (e.response) {
+      console.error(`Error Gemini: Status ${e.response.status}. Data:`, e.response.data);
+      await ctx.reply(`⚠️ Error de API: No pude procesar tu solicitud con el asistente (código ${e.response.status}). Por favor, revisá la consola para el detalle del error.`, mainKeyboard.reply_markup);
+    } else if (e.request) {
+      console.error("Error Gemini: No se recibió respuesta del servidor.", e.message);
+      await ctx.reply("⚠️ Error de red: No pude contactar al asistente. Revisa la conexión.", mainKeyboard.reply_markup);
+    } else {
+      console.error("Error Gemini:", e.message);
+      await ctx.reply("⚠️ Error interno del asistente. Revisa la consola.", mainKeyboard.reply_markup);
     }
-  
-  // fallback: Gemini AI
-  if (GEMINI_API_KEY) {
-    try {
-      const payload = {
-          contents: [{ parts: [{ text: text }] }],
-          systemInstruction: {
-              parts: [{ text: "Eres un asistente amigable y formal que responde preguntas generales, pero siempre sugiere usar el menú principal para las funciones del bot de devoluciones de Repuestos El Cholo." }]
-          },
-          generationConfig: {
-            maxOutputTokens: 256
-          }
-      };
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`;
-
-      const aiResp = await axios.post(apiUrl, payload);
-
-      const reply = aiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Perdón, no entendí. Podés usar el menú.";
-      
-      await ctx.reply(reply, mainKeyboard.reply_markup); 
-      
-      return;
-    } catch (e) {
-      console.error("--- Error en la llamada a Gemini ---");
-      if (e.response) {
-        // El servidor respondió con un código de estado fuera de 2xx
-        console.error(`Error Gemini: Status ${e.response.status}. Data:`, e.response.data);
-        await ctx.reply(`⚠️ Error de API: No pude procesar tu solicitud con el asistente (código ${e.response.status}). Por favor, revisá la consola para el detalle del error.`, mainKeyboard.reply_markup);
-      } else if (e.request) {
-        // La solicitud fue hecha pero no hubo respuesta
-        console.error("Error Gemini: No se recibió respuesta del servidor.", e.message);
-        await ctx.reply("⚠️ Error de red: No pude contactar al asistente. Revisa la conexión.", mainKeyboard.reply_markup);
-      } else {
-        // Otros errores (ej. configuración de Axios)
-        console.error("Error Gemini:", e.message);
-        await ctx.reply("⚠️ Error interno del asistente. Revisa la consola.", mainKeyboard.reply_markup);
-      }
-      return;
-    }
+    return;
   }
-
-  // Fallback si no está en un flujo y Gemini no respondió o no está configurado
-  await ctx.reply("No entendí eso. Por favor, usá los botones del menú principal, que están *debajo* del último mensaje que te envié, o escribí /start.", mainKeyboard.reply_markup);
 }
-});
+
+// Fallback si no está en un flujo ni con Gemini
+await ctx.reply(
+  "No entendí eso. Por favor, usá los botones del menú principal, que están *debajo* del último mensaje que te envié, o escribí /start.",
+  mainKeyboard.reply_markup
+);
 
 bot.action('confirm_save', async (ctx)=>{
   try { await ctx.answerCbQuery(); } catch(e) { console.warn("Callback query timed out (confirm_save).", e.message); }
