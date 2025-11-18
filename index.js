@@ -455,6 +455,7 @@ bot.action(/get_ticket_(\d+)/, async (ctx) => {
         }
       }
     } catch(e){ console.warn("No se pudo leer email del proveedor:", e.message); }
+    console.log("DEBUG: providerEmail encontrado:", providerEmail);
 
     if (providerEmail) {
       try {
@@ -793,7 +794,6 @@ bot.action('confirm_save', async (ctx)=>{
   // Generación y envío del PDF (siempre intentamos generar el PDF independientemente del Sheets)
   let pdfSent = false;
   try {
-    // Usamos la fecha real de registro para el ticket
     const ticketData = { 
         remitente: tab, 
         proveedor: s.proveedor, 
@@ -804,39 +804,81 @@ bot.action('confirm_save', async (ctx)=>{
         remito: s.remito, 
         fechaFactura: s.fechaFactura, 
         usuario: ctx.from?.first_name || ctx.from?.username || String(ctx.chat.id),
-        fecha: registrationDate // Fecha de registro completa
+        fecha: registrationDate
     };
+
     const pdfBuf = await generateTicketPDF(ticketData);
 
-    // 1. ENVÍO AL USUARIO QUE CONFIRMÓ (CRÍTICO)
-    await ctx.replyWithDocument({ source: pdfBuf, filename: `ticket_${Date.now()}.pdf` });
-    pdfSent = true;
+    // 1. PDF AL USUARIO
+    await ctx.replyWithDocument({ 
+        source: pdfBuf, 
+        filename: `ticket_${Date.now()}.pdf` 
+    });
 
-    // 2. ENVÍO AL OWNER (Notificación)
+    // 2. BUSCAR EMAIL DEL PROVEEDOR EN GOOGLE SHEETS
+    console.log("DEBUG: Buscando email del proveedor:", ticketData.proveedor);
+    const providerEmail = await getProviderEmail(ticketData.proveedor);
+    console.log("DEBUG: providerEmail encontrado:", providerEmail);
+
+    // 3. ENVIAR MAIL SOLO SI HAY
+    if (providerEmail) {
+        try {
+            console.log("DEBUG: preparando mail...");
+
+            const subject = `Devolución registrada - ${ticketData.remitente} - ${ticketData.codigo || ''}`;
+            const html = `<p>Hola,</p>
+                <p>Se registró una devolución desde <b>${ticketData.remitente}</b>:</p>
+                <ul>
+                    <li><b>Proveedor:</b> ${ticketData.proveedor}</li>
+                    <li><b>Código:</b> ${ticketData.codigo}</li>
+                    <li><b>Descripción:</b> ${ticketData.descripcion}</li>
+                    <li><b>Cantidad:</b> ${ticketData.cantidad}</li>
+                    <li><b>Motivo:</b> ${ticketData.motivo}</li>
+                    <li><b>N° Remito/Factura:</b> ${ticketData.remito}</li>
+                    <li><b>Fecha factura:</b> ${ticketData.fechaFactura}</li>
+                </ul>
+                <p>Adjuntamos el ticket PDF para gestionar la devolución.</p>
+                <p>Saludos,<br/>Repuestos El Cholo</p>`;
+
+            console.log("DEBUG: llamando a sendMailToProvider...");
+            await sendMailToProvider({
+                to: providerEmail,
+                cc: "info@repuestoselcholo.com.ar",
+                subject,
+                html,
+                attachmentBuf: pdfBuf,
+                attachmentName: `ticket_${ticketData.remitente}_${ticketData.codigo || ''}.pdf`
+            });
+
+            console.log("DEBUG: MAIL ENVIADO OK");
+
+        } catch (error) {
+            console.error("ERROR enviando mail:", error);
+        }
+    } else {
+        console.warn("⚠️ No se encontró email para el proveedor:", ticketData.proveedor);
+    }
+
+    // 4. NOTIFICACIÓN AL OWNER
     if (OWNER_CHAT_ID) {
-      try {
-        // Generamos el buffer nuevamente para el owner para evitar problemas si Telegraf ya consumió el buffer.
-        // Esto es necesario para asegurar que el documento se adjunte correctamente en ambos envíos.
-        const pdfBufForOwner = await generateTicketPDF(ticketData); 
-        await bot.telegram.sendDocument(OWNER_CHAT_ID, { source: pdfBufForOwner, filename: `ticket_${Date.now()}_owner.pdf` }, { caption: `Nueva devolución registrada en ${tab} (Registro en Sheets: ${sheetsError ? 'FALLÓ' : sheetsInitialized ? 'OK' : 'OFF'}).` });
-      } catch(e){ console.error("Error enviando notificación al owner:", e.message); }
-    }
-    
-    // Mensaje final
-    if (!sheetsError) { 
-      await ctx.reply("Recordá conservar tu ticket PDF para seguimiento.");
+        const pdfBuf2 = await generateTicketPDF(ticketData);
+        await bot.telegram.sendDocument(OWNER_CHAT_ID, { 
+            source: pdfBuf2, 
+            filename: `ticket_${Date.now()}_owner.pdf` 
+        });
     }
 
-  } catch(e) {
-    console.error("Error generando/enviando PDF:", e.message);
-    if (!pdfSent) { // Solo si no se pudo enviar el documento al usuario
-        // Si falló el PDF, notificamos
-        await ctx.reply("❌ Error al generar o enviar el ticket PDF. La devolución *fue* registrada en Google Sheets (si estaba habilitado), pero el ticket PDF falló. Avisá al administrador.");
-    }
+    await ctx.reply("Recordá conservar tu ticket PDF para seguimiento.");
+
+} catch (error) {
+    console.error("ERROR en confirm_save:", error);
+    await ctx.reply("❌ Hubo un error al generar o enviar el ticket.");
+}
+
     // Si Sheets falló, el mensaje de error ya se envió antes.
   }
 
-  ctx.session = {};
+  ,ctx.session = {});
   return replyMain(ctx);
 });
 
