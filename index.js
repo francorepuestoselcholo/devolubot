@@ -240,6 +240,24 @@ async function addProvider(nombre, email) {
   }
 }
 
+async function getProviderEmail(providerName) {
+  if (!sheetsInitialized) return null;
+  try {
+    const resp = await sheetsClient.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `Proveedores!A2:B` }).catch(()=>({ data: { values: [] }}));
+    const rows = resp.data.values || [];
+    for (const r of rows) {
+      const name = (r[0] || "").trim();
+      const mail = (r[1] || "").trim();
+      if (name && providerName && name.toLowerCase() === providerName.toLowerCase()) {
+        return mail || null;
+      }
+    }
+  } catch(e){ 
+    console.warn("No se pudo leer email del proveedor:", e.message); 
+  }
+  return null;
+}
+
 
 // --- Helpers ---
 async function appendLog(message) {
@@ -870,16 +888,14 @@ bot.action('confirm_save', async (ctx)=>{
 
     await ctx.reply("Recordá conservar tu ticket PDF para seguimiento.");
 
-} catch (error) {
+  } catch (error) {
     console.error("ERROR en confirm_save:", error);
     await ctx.reply("❌ Hubo un error al generar o enviar el ticket.");
-}
-
-    // Si Sheets falló, el mensaje de error ya se envió antes.
   }
 
-  ,ctx.session = {});
-  return replyMain(ctx);
+    // Si Sheets falló, el mensaje de error ya se envió antes.
+
+  ctx.session = {};
 });
 
 // init and launch
